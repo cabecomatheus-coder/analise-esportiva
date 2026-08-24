@@ -12,6 +12,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
+from zoneinfo import ZoneInfo  # Suporte nativo para fusos horários
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+FUSO_BRASIL = ZoneInfo("America/Sao_Paulo")
 
 # ==============================================================================
 # 2. CAMADA DE DADOS
@@ -96,7 +99,8 @@ def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
     }
     partidas = []
     url = "https://v3.football.api-sports.io/fixtures"
-    params = {"date": data}
+    # Passando a timezone para a própria API do Football
+    params = {"date": data, "timezone": "America/Sao_Paulo"}
     
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=12)
@@ -116,8 +120,11 @@ def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
                 liga_nome = f"{liga_nome_bruto} ({pais})"
                 mandante_nome = item["teams"]["home"]["name"]
                 visitante_nome = item["teams"]["away"]["name"]
+                
+                # Conversão correta para o fuso de Brasília
                 date_raw = item["fixture"]["date"]
-                horario = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+                horario_utc = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+                horario_local = horario_utc.astimezone(FUSO_BRASIL)
                 
                 seed_m = abs(hash(mandante_nome)) % 10000
                 seed_v = abs(hash(visitante_nome)) % 10000
@@ -133,7 +140,7 @@ def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
                     liga_nome=liga_nome,
                     mandante=mandante_nome,
                     visitante=visitante_nome,
-                    horario=horario,
+                    horario=horario_local,
                     liquidez=liquidez,
                     estat_mandante=estat_m,
                     estat_visitante=estat_v,
@@ -166,8 +173,11 @@ def simular_partidas_do_dia(data_ref: str) -> List[Partida]:
         estat_mandante = _gerar_estatisticas_aleatorias(mandante, seed_base + i)
         estat_visitante = _gerar_estatisticas_aleatorias(visitante, seed_base + i + 500)
 
-        horario = datetime.strptime(data_ref, "%Y-%m-%d") + timedelta(
-            hours=rng.choice([11, 13, 15, 16, 18, 19, 21]), minutes=rng.choice([0, 15, 30, 45])
+        data_obj = datetime.strptime(data_ref, "%Y-%m-%d")
+        horario = data_obj.replace(
+            hour=rng.choice([11, 13, 15, 16, 18, 19, 21]),
+            minute=rng.choice([0, 15, 30, 45]),
+            tzinfo=FUSO_BRASIL
         )
         liquidez = round(rng.uniform(150_000, 4_500_000), 2)
 
@@ -334,7 +344,6 @@ def render_detalhes_partida(partida: Partida, analise: dict):
     sec = analise["secundarios"]
     top_10 = analise["top_10_placares"]
 
-    # Forma Recente e Médias
     st.markdown("#### 📊 Retrospecto dos ÚLTIMOS 5 JOGOS e Estatísticas Média")
     col_m, col_v = st.columns(2)
     
@@ -352,7 +361,6 @@ def render_detalhes_partida(partida: Partida, analise: dict):
 
     st.divider()
 
-    # Tabs de Mercados + Top 10 Placares
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎯 Match Odds (1X2)", "🎯 Top 10 Placares", "⚽ Gols", "🚩 Escanteios", "🟨 Cartões e Chutes"])
 
     with tab1:
@@ -396,7 +404,7 @@ def render_detalhes_partida(partida: Partida, analise: dict):
 
 def main():
     st.title("⚽ SILVER BOOL")
-    st.caption("Organizado por Ligas e Horários · Top 10 Placares e Estatísticas Completas")
+    st.caption("Organizado por Ligas e Horário de Brasília (BRT) · Top 10 Placares e Estatísticas Completas")
 
     with st.sidebar:
         st.header("⚙️ SILVER BOOL — Painel")
@@ -406,7 +414,7 @@ def main():
         if modo_dados == "API-Football":
             api_key = st.text_input("Cole sua API Key aqui:", type="password", help="Insira sua chave da API-Football.")
 
-        data_ref = st.date_input("Data de referência", value=datetime.now())
+        data_ref = st.date_input("Data de referência", value=datetime.now(FUSO_BRASIL))
         st.divider()
         
         st.markdown("**🔗 Atalhos Externos:**")
@@ -414,27 +422,23 @@ def main():
 
     data_ref_str = data_ref.strftime("%Y-%m-%d")
 
-    with st.spinner("SILVER BOOL: Carregando e agrupando jogos por ligas..."):
+    with st.spinner("SILVER BOOL: Carregando e ajustando horários das partidas..."):
         partidas = obter_partidas_do_dia(data_ref_str, modo_dados, api_key)
         
         if not partidas:
             return
 
-        # Agrupamento por Liga
         ligas_dict: Dict[str, List[Partida]] = {}
         for p in partidas:
             ligas_dict.setdefault(p.liga_nome, []).append(p)
 
-    # Exibição organizada por Ligas
     for liga, lista_jogos in ligas_dict.items():
         st.markdown(f"### 🏆 {liga}")
-        
-        # Ordenar os jogos da mesma liga pelo horário
         lista_jogos_ordenada = sorted(lista_jogos, key=lambda p: p.horario)
 
         for p in lista_jogos_ordenada:
             analise = analisar_partida_completa(p)
-            titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} — {p.mandante} x {p.visitante}"
+            titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} (Horário de Brasília) — {p.mandante} x {p.visitante}"
             
             with st.expander(titulo_expander):
                 render_detalhes_partida(p, analise)
