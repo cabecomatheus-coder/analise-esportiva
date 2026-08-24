@@ -146,13 +146,13 @@ def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
 
 _TIMES_MUNDO = [
     ("Premier League (Inglaterra)", "Manchester City", "Arsenal"),
+    ("Premier League (Inglaterra)", "Liverpool", "Chelsea"),
     ("Brasileirão Série A (Brasil)", "Palmeiras", "Flamengo"),
+    ("Brasileirão Série A (Brasil)", "Fluminense", "Botafogo"),
     ("La Liga (Espanha)", "Real Madrid", "Barcelona"),
+    ("La Liga (Espanha)", "Atlético de Madrid", "Sevilla"),
     ("Serie A (Itália)", "Inter de Milão", "Juventus"),
     ("Bundesliga (Alemanha)", "Bayern de Munique", "Bayer Leverkusen"),
-    ("Primera División (Argentina)", "Boca Juniors", "River Plate"),
-    ("Primeira Liga (Portugal)", "Benfica", "Porto"),
-    ("Süper Lig (Turquia)", "Galatasaray", "Fenerbahçe"),
 ]
 
 
@@ -167,7 +167,7 @@ def simular_partidas_do_dia(data_ref: str) -> List[Partida]:
         estat_visitante = _gerar_estatisticas_aleatorias(visitante, seed_base + i + 500)
 
         horario = datetime.strptime(data_ref, "%Y-%m-%d") + timedelta(
-            hours=rng.choice([12, 14, 16, 17, 18, 20, 21]), minutes=rng.choice([0, 15, 30, 45])
+            hours=rng.choice([11, 13, 15, 16, 18, 19, 21]), minutes=rng.choice([0, 15, 30, 45])
         )
         liquidez = round(rng.uniform(150_000, 4_500_000), 2)
 
@@ -224,6 +224,22 @@ def matriz_placares_poisson(lambda_mandante: float, lambda_visitante: float,
     return np.outer(probs_mandante, probs_visitante)
 
 
+def obter_top_10_placares(matriz: np.ndarray) -> List[Dict]:
+    placares = []
+    max_gols = min(matriz.shape[0], 6)
+    for i in range(max_gols):
+        for j in range(max_gols):
+            prob = matriz[i, j]
+            placares.append({
+                "placar": f"{i} x {j}",
+                "probabilidade": prob,
+                "prob_percentual": prob * 100,
+                "odd_justa": odd_justa(prob)
+            })
+    placares_ordenados = sorted(placares, key=lambda x: x["probabilidade"], reverse=True)
+    return placares_ordenados[:10]
+
+
 def probabilidades_1x2(matriz: np.ndarray) -> Dict[str, float]:
     p_mandante = np.tril(matriz, -1).sum()
     p_empate = np.trace(matriz)
@@ -239,15 +255,6 @@ def probabilidade_over_under(matriz: np.ndarray, linha: float) -> Dict[str, floa
             if i + j > linha:
                 total_over += matriz[i, j]
     return {"over": total_over, "under": 1 - total_over}
-
-
-def probabilidade_btts(matriz: np.ndarray) -> Dict[str, float]:
-    max_gols = matriz.shape[0] - 1
-    p_sim = 0.0
-    for i in range(1, max_gols + 1):
-        for j in range(1, max_gols + 1):
-            p_sim += matriz[i, j]
-    return {"sim": p_sim, "nao": 1 - p_sim}
 
 
 def odd_justa(prob: float) -> float:
@@ -272,21 +279,7 @@ def calcular_mercado_escanteios(estat_mandante: EstatisticasTime,
         "lambda_mandante": round(lambda_cantos_mandante, 2),
         "lambda_visitante": round(lambda_cantos_visitante, 2),
         "total_esperado": round(total_esperado, 2),
-        "total_esperado_1t": round(total_esperado * 0.45, 2),
         "over_under": over_under,
-    }
-
-
-def calcular_handicap_asiatico(lambda_mandante: float, lambda_visitante: float) -> dict:
-    gap = lambda_mandante - lambda_visitante
-    linha_bruta = round(gap * 2) / 2
-    resto = abs(gap - linha_bruta)
-    if 0.15 < resto < 0.35:
-        linha_bruta += (0.25 if gap > linha_bruta else -0.25)
-    return {
-        "linha_sugerida": round(linha_bruta, 2),
-        "favorito": "Mandante" if gap >= 0 else "Visitante",
-        "gap_gols_esperados": round(abs(gap), 2),
     }
 
 
@@ -306,25 +299,16 @@ def analisar_partida_completa(partida: Partida) -> dict:
         "lambda_mandante": round(lambda_m, 2),
         "lambda_visitante": round(lambda_v, 2),
         "matriz_placares": matriz,
+        "top_10_placares": obter_top_10_placares(matriz),
         "probs_1x2": probabilidades_1x2(matriz),
         "over_under_gols": {linha: probabilidade_over_under(matriz, linha) for linha in [1.5, 2.5, 3.5]},
-        "btts": probabilidade_btts(matriz),
         "escanteios": calcular_mercado_escanteios(partida.estat_mandante, partida.estat_visitante),
-        "handicap": calcular_handicap_asiatico(lambda_m, lambda_v),
         "secundarios": calcular_mercados_secundarios(partida.estat_mandante, partida.estat_visitante),
     }
 
 # ==============================================================================
 # 4. CAMADA DE APRESENTAÇÃO (STREAMLIT)
 # ==============================================================================
-
-def formatar_moeda(valor: float) -> str:
-    if valor >= 1_000_000:
-        return f"R$ {valor / 1_000_000:.2f}M"
-    if valor >= 1_000:
-        return f"R$ {valor / 1_000:.0f}K"
-    return f"R$ {valor:.2f}"
-
 
 def formatar_forma(jogos: List[str]) -> str:
     icones = []
@@ -339,17 +323,7 @@ def grafico_probabilidades_1x2(probs: Dict[str, float], mandante: str, visitante
     labels = [mandante, "Empate", visitante]
     valores = [probs["mandante"] * 100, probs["empate"] * 100, probs["visitante"] * 100]
     fig = go.Figure(data=[go.Bar(x=labels, y=valores, text=[f"{v:.1f}%" for v in valores], textposition="auto", marker_color=["#2E86DE", "#F1C40F", "#E74C3C"])])
-    fig.update_layout(title="Probabilidades Match Odds (1X2)", yaxis_title="Probabilidade (%)", height=320, margin=dict(t=40, b=20))
-    return fig
-
-
-def grafico_over_under(dados_ou: Dict[float, Dict[str, float]], titulo: str):
-    linhas = list(dados_ou.keys())
-    fig = go.Figure(data=[
-        go.Bar(name="Over", x=[str(l) for l in linhas], y=[dados_ou[l]["over"] * 100 for l in linhas], marker_color="#27AE60"),
-        go.Bar(name="Under", x=[str(l) for l in linhas], y=[dados_ou[l]["under"] * 100 for l in linhas], marker_color="#C0392B"),
-    ])
-    fig.update_layout(barmode="group", title=titulo, yaxis_title="Probabilidade (%)", height=320)
+    fig.update_layout(title="Probabilidades Match Odds (1X2)", yaxis_title="Probabilidade (%)", height=300, margin=dict(t=40, b=20))
     return fig
 
 
@@ -358,51 +332,62 @@ def render_detalhes_partida(partida: Partida, analise: dict):
     ou = analise["over_under_gols"]
     esc = analise["escanteios"]
     sec = analise["secundarios"]
+    top_10 = analise["top_10_placares"]
 
-    # --- Seção 1: Forma Recente e Médias ---
+    # Forma Recente e Médias
     st.markdown("#### 📊 Retrospecto dos ÚLTIMOS 5 JOGOS e Estatísticas Média")
     col_m, col_v = st.columns(2)
     
     with col_m:
         st.markdown(f"**🏠 {partida.mandante}**")
         st.markdown(f"**Forma Recente:** {formatar_forma(partida.estat_mandante.ultimos_5_jogos)}")
-        st.caption(f"⚽ Gols Marcados (média): {partida.estat_mandante.gols_marcados_media} | Sofridos: {partida.estat_mandante.gols_sofridos_media}")
-        st.caption(f"🚩 Cantos Pró (média): {partida.estat_mandante.escanteios_favor_media} | Cartões Amarelos: {partida.estat_mandante.cartoes_amarelos_media}")
+        st.caption(f"⚽ Gols Marcados (méd): {partida.estat_mandante.gols_marcados_media} | Sofridos: {partida.estat_mandante.gols_sofridos_media}")
+        st.caption(f"🚩 Cantos Pró (méd): {partida.estat_mandante.escanteios_favor_media} | Amarelos: {partida.estat_mandante.cartoes_amarelos_media}")
 
     with col_v:
         st.markdown(f"**🚀 {partida.visitante}**")
         st.markdown(f"**Forma Recente:** {formatar_forma(partida.estat_visitante.ultimos_5_jogos)}")
-        st.caption(f"⚽ Gols Marcados (média): {partida.estat_visitante.gols_marcados_media} | Sofridos: {partida.estat_visitante.gols_sofridos_media}")
-        st.caption(f"🚩 Cantos Pró (média): {partida.estat_visitante.escanteios_favor_media} | Cartões Amarelos: {partida.estat_visitante.cartoes_amarelos_media}")
+        st.caption(f"⚽ Gols Marcados (méd): {partida.estat_visitante.gols_marcados_media} | Sofridos: {partida.estat_visitante.gols_sofridos_media}")
+        st.caption(f"🚩 Cantos Pró (méd): {partida.estat_visitante.escanteios_favor_media} | Amarelos: {partida.estat_visitante.cartoes_amarelos_media}")
 
     st.divider()
 
-    # --- Seção 2: Probabilidades e Odds Justas ---
-    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Match Odds (1X2)", "⚽ Gols", "🚩 Escanteios", "🟨 Cartões e Chutes"])
+    # Tabs de Mercados + Top 10 Placares
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎯 Match Odds (1X2)", "🎯 Top 10 Placares", "⚽ Gols", "🚩 Escanteios", "🟨 Cartões e Chutes"])
 
     with tab1:
         c1, c2, c3 = st.columns(3)
-        c1.metric(f"Vitória {partida.mandante}", f"{p['mandante']*100:.1f}%", f"Odd justa: {odd_justa(p['mandante'])}")
-        c2.metric("Empate", f"{p['empate']*100:.1f}%", f"Odd justa: {odd_justa(p['empate'])}")
-        c3.metric(f"Vitória {partida.visitante}", f"{p['visitante']*100:.1f}%", f"Odd justa: {odd_justa(p['visitante'])}")
+        c1.metric(f"Vitória {partida.mandante}", f"{p['mandante']*100:.1f}%", f"Odd: {odd_justa(p['mandante'])}")
+        c2.metric("Empate", f"{p['empate']*100:.1f}%", f"Odd: {odd_justa(p['empate'])}")
+        c3.metric(f"Vitória {partida.visitante}", f"{p['visitante']*100:.1f}%", f"Odd: {odd_justa(p['visitante'])}")
         st.plotly_chart(grafico_probabilidades_1x2(p, partida.mandante, partida.visitante), use_container_width=True)
 
     with tab2:
+        st.markdown("#### 🎯 10 Resultados/Placares Mais Prováveis")
+        df_top10 = pd.DataFrame([
+            {
+                "Placar Exato": item["placar"],
+                "Probabilidade (%)": f"{item['prob_percentual']:.2f}%",
+                "Odd Justa Estimada": f"{item['odd_justa']:.2f}"
+            }
+            for item in top_10
+        ])
+        st.dataframe(df_top10, use_container_width=True, hide_index=True)
+
+    with tab3:
         cols = st.columns(len(ou))
         for col, (linha, valores) in zip(cols, ou.items()):
             with col:
                 st.metric(f"Over {linha}", f"{valores['over']*100:.1f}%", f"Odd: {odd_justa(valores['over'])}")
                 st.metric(f"Under {linha}", f"{valores['under']*100:.1f}%", f"Odd: {odd_justa(valores['under'])}")
-        st.plotly_chart(grafico_over_under(ou, "Probabilidade de Gols"), use_container_width=True)
 
-    with tab3:
+    with tab4:
         c1, c2, c3 = st.columns(3)
         c1.metric(f"Cantos {partida.mandante}", esc["lambda_mandante"])
         c2.metric(f"Cantos {partida.visitante}", esc["lambda_visitante"])
         c3.metric("Total Esperado", esc["total_esperado"])
-        st.plotly_chart(grafico_over_under(esc["over_under"], "Probabilidade de Escanteios"), use_container_width=True)
 
-    with tab4:
+    with tab5:
         c1, c2, c3 = st.columns(3)
         c1.metric("Amarelos Esperados", sec["cartoes_amarelos_esperados"])
         c2.metric("Vermelhos Esperados", sec["cartoes_vermelhos_esperados"])
@@ -411,7 +396,7 @@ def render_detalhes_partida(partida: Partida, analise: dict):
 
 def main():
     st.title("⚽ SILVER BOOL")
-    st.caption("Análise Preditiva e Estatísticas de Apostas Esportivas · Cobertura Total de Jogos")
+    st.caption("Organizado por Ligas e Horários · Top 10 Placares e Estatísticas Completas")
 
     with st.sidebar:
         st.header("⚙️ SILVER BOOL — Painel")
@@ -429,23 +414,32 @@ def main():
 
     data_ref_str = data_ref.strftime("%Y-%m-%d")
 
-    with st.spinner("SILVER BOOL: Carregando todos os jogos da data..."):
+    with st.spinner("SILVER BOOL: Carregando e agrupando jogos por ligas..."):
         partidas = obter_partidas_do_dia(data_ref_str, modo_dados, api_key)
         
         if not partidas:
             return
 
-        partidas_ordenadas = sorted(partidas, key=lambda p: p.horario)
+        # Agrupamento por Liga
+        ligas_dict: Dict[str, List[Partida]] = {}
+        for p in partidas:
+            ligas_dict.setdefault(p.liga_nome, []).append(p)
 
-    st.subheader(f"📋 Lista Completa de Jogos do Dia ({len(partidas_ordenadas)} partidas encontradas)")
-    st.info("💡 Clique sobre qualquer partida abaixo para expandir e visualizar as estatísticas completas, os últimos 5 jogos e as probabilidades.")
-
-    for p in partidas_ordenadas:
-        analise = analisar_partida_completa(p)
-        titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} — [{p.liga_nome}] {p.mandante} x {p.visitante}"
+    # Exibição organizada por Ligas
+    for liga, lista_jogos in ligas_dict.items():
+        st.markdown(f"### 🏆 {liga}")
         
-        with st.expander(titulo_expander):
-            render_detalhes_partida(p, analise)
+        # Ordenar os jogos da mesma liga pelo horário
+        lista_jogos_ordenada = sorted(lista_jogos, key=lambda p: p.horario)
+
+        for p in lista_jogos_ordenada:
+            analise = analisar_partida_completa(p)
+            titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} — {p.mandante} x {p.visitante}"
+            
+            with st.expander(titulo_expander):
+                render_detalhes_partida(p, analise)
+
+        st.divider()
 
 
 if __name__ == "__main__":
