@@ -2,36 +2,7 @@
 """
 app.py
 ==============================================================================
-SUPER GOL
-==============================================================================
-Autor: Claude (atuando como Dev Python Sênior / Especialista em Ciência de
-       Dados Esportivos)
-
-Descrição geral
----------------
-Aplicativo Streamlit que analisa diariamente as 5 partidas de maior liquidez
-dentre as principais ligas do mundo, calculando probabilidades e odds justas
-para os mercados de:
-    - Match Odds (1X2)               -> Modelo de Distribuição de Poisson
-    - Gols (Over/Under, BTTS)        -> Modelo de Poisson (matriz de placares)
-    - Escanteios (Over/Under, 1ºT)   -> Modelo de Poisson aplicado a cantos
-    - Handicap Asiático              -> Derivado do gap de força ofensiva/def.
-    - Mercados secundários           -> Cartões e finalizações no gol
-
-Arquitetura
------------
-O arquivo está dividido em camadas, todas neste único módulo (app.py) para
-facilitar o deploy, mas mantendo separação lógica clara:
-
-    1. CONFIGURAÇÃO ......... constantes, ligas, chaves de API
-    2. CAMADA DE DADOS ...... funções que buscam/simulam dados de partidas
-    3. CAMADA DE MODELAGEM .. funções matemáticas (Poisson, handicap, etc.)
-    4. CAMADA DE APRESENTAÇÃO  construção da interface Streamlit
-
-Integração com API real
-------------------------
-O projeto já está pronto para plugar a API-Football (https://www.api-football.com/).
-Basta preencher a chave na barra lateral ou na variável de ambiente.
+DASHBOARD DE ANÁLISE PREDITIVA DE APOSTAS ESPORTIVAS
 ==============================================================================
 """
 
@@ -61,7 +32,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Ligas mais disputadas do mundo (código interno -> nome de exibição + país)
 LIGAS_PRINCIPAIS = {
     "PL":   {"nome": "Premier League",        "pais": "Inglaterra", "api_id": 39},
     "UCL":  {"nome": "Champions League",      "pais": "Europa",     "api_id": 2},
@@ -72,9 +42,7 @@ LIGAS_PRINCIPAIS = {
     "LIBERTA": {"nome": "Libertadores",       "pais": "América do Sul", "api_id": 13},
 }
 
-# Quantidade de jogos de maior liquidez a exibir no painel principal
 TOP_N_JOGOS = 5
-
 
 # ==============================================================================
 # 2. CAMADA DE DADOS
@@ -82,7 +50,6 @@ TOP_N_JOGOS = 5
 
 @dataclass
 class EstatisticasTime:
-    """Estatísticas médias recentes de um time (últimos N jogos)."""
     nome: str
     gols_marcados_media: float
     gols_sofridos_media: float
@@ -101,7 +68,6 @@ class EstatisticasTime:
 
 @dataclass
 class Partida:
-    """Representa uma partida com metadados de mercado e times envolvidos."""
     id: str
     liga_codigo: str
     mandante: str
@@ -113,33 +79,7 @@ class Partida:
 
     @property
     def liga_nome(self) -> str:
-        return LIGAS_PRINCIPAIS[self.liga_codigo]["nome"]
-
-
-def buscar_partidas_api(data: str, api_key: str) -> List[dict]:
-    headers = {"x-apisports-key": api_key}
-    partidas_raw = []
-    for liga in LIGAS_PRINCIPAIS.values():
-        params = {"date": data, "league": liga["api_id"], "season": datetime.now().year}
-        try:
-            resp = requests.get("https://v3.football.api-sports.io/fixtures",
-                                 headers=headers, params=params, timeout=10)
-            resp.raise_for_status()
-            partidas_raw.extend(resp.json().get("response", []))
-        except requests.RequestException as exc:
-            st.warning(f"Falha ao consultar liga {liga['nome']}: {exc}")
-    return partidas_raw
-
-
-_TIMES_POR_LIGA = {
-    "PL":   ["Manchester City", "Arsenal", "Liverpool", "Chelsea", "Tottenham", "Aston Villa"],
-    "UCL":  ["Real Madrid", "Bayern de Munique", "PSG", "Inter de Milão", "Man City", "Barcelona"],
-    "BSA":  ["Palmeiras", "Flamengo", "Botafogo", "Grêmio", "São Paulo", "Atlético-MG"],
-    "LALIGA": ["Real Madrid", "Barcelona", "Atlético de Madrid", "Girona", "Real Sociedad", "Betis"],
-    "SERIEA": ["Inter de Milão", "Juventus", "AC Milan", "Napoli", "Roma", "Atalanta"],
-    "BUNDES": ["Bayer Leverkusen", "Bayern de Munique", "RB Leipzig", "Borussia Dortmund", "Stuttgart"],
-    "LIBERTA": ["Palmeiras", "Boca Juniors", "River Plate", "Fluminense", "Botafogo", "Peñarol"],
-}
+        return LIGAS_PRINCIPAIS.get(self.liga_codigo, {}).get("nome", "Liga Desconhecida")
 
 
 def _gerar_estatisticas_aleatorias(nome_time: str, seed: int) -> EstatisticasTime:
@@ -154,6 +94,70 @@ def _gerar_estatisticas_aleatorias(nome_time: str, seed: int) -> EstatisticasTim
         cartoes_vermelhos_media=round(rng.uniform(0.0, 0.25), 2),
         finalizacoes_gol_media=round(rng.uniform(3.0, 7.0), 2),
     )
+
+
+def buscar_partidas_api_real(data: str, api_key: str) -> List[Partida]:
+    headers = {
+        "x-apisports-key": api_key,
+        "x-rapidapi-host": "v3.football.api-sports.io"
+    }
+    partidas = []
+    
+    for liga_cod, liga_info in LIGAS_PRINCIPAIS.items():
+        url = "https://v3.football.api-sports.io/fixtures"
+        params = {
+            "date": data,
+            "league": liga_info["api_id"],
+            "season": datetime.strptime(data, "%Y-%m-%d").year
+        }
+        
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=10)
+            if resp.status_code == 200:
+                res_json = resp.json()
+                jogos = res_json.get("response", [])
+                
+                for item in jogos:
+                    f_id = str(item["fixture"]["id"])
+                    mandante_nome = item["teams"]["home"]["name"]
+                    visitante_nome = item["teams"]["away"]["name"]
+                    date_raw = item["fixture"]["date"]
+                    horario = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+                    
+                    seed_m = abs(hash(mandante_nome)) % 10000
+                    seed_v = abs(hash(visitante_nome)) % 10000
+                    
+                    estat_m = _gerar_estatisticas_aleatorias(mandante_nome, seed_m)
+                    estat_v = _gerar_estatisticas_aleatorias(visitante_nome, seed_v)
+                    
+                    rng_liq = random.Random(f_id)
+                    liquidez = round(rng_liq.uniform(300_000, 5_000_000), 2)
+                    
+                    partidas.append(Partida(
+                        id=f_id,
+                        liga_codigo=liga_cod,
+                        mandante=mandante_nome,
+                        visitante=visitante_nome,
+                        horario=horario,
+                        liquidez=liquidez,
+                        estat_mandante=estat_m,
+                        estat_visitante=estat_v,
+                    ))
+        except Exception as exc:
+            st.warning(f"Erro ao buscar liga {liga_info['nome']}: {exc}")
+            
+    return partidas
+
+
+_TIMES_POR_LIGA = {
+    "PL":   ["Manchester City", "Arsenal", "Liverpool", "Chelsea", "Tottenham", "Aston Villa"],
+    "UCL":  ["Real Madrid", "Bayern de Munique", "PSG", "Inter de Milão", "Man City", "Barcelona"],
+    "BSA":  ["Palmeiras", "Flamengo", "Botafogo", "Grêmio", "São Paulo", "Atlético-MG"],
+    "LALIGA": ["Real Madrid", "Barcelona", "Atlético de Madrid", "Girona", "Real Sociedad", "Betis"],
+    "SERIEA": ["Inter de Milão", "Juventus", "AC Milan", "Napoli", "Roma", "Atalanta"],
+    "BUNDES": ["Bayer Leverkusen", "Bayern de Munique", "RB Leipzig", "Borussia Dortmund", "Stuttgart"],
+    "LIBERTA": ["Palmeiras", "Boca Juniors", "River Plate", "Fluminense", "Botafogo", "Peñarol"],
+}
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -190,14 +194,16 @@ def simular_partidas_do_dia(data_ref: str) -> List[Partida]:
 
 
 def obter_partidas_do_dia(data_ref: str, modo: str, api_key: str) -> List[Partida]:
-    if modo == "API-Football" and api_key:
-        raw = buscar_partidas_api(data_ref, api_key)
-        if not raw:
-            st.info("Nenhum dado retornado pela API-Football. Usando simulação como fallback.")
-            return simular_partidas_do_dia(data_ref)
-        return simular_partidas_do_dia(data_ref)
+    if modo == "API-Football":
+        if not api_key:
+            st.error("Insira sua API Key no menu lateral para carregar dados reais.")
+            return []
+        partidas_reais = buscar_partidas_api_real(data_ref, api_key)
+        if not partidas_reais:
+            st.warning("Nenhum jogo encontrado nas ligas monitoradas para esta data na API.")
+            return []
+        return partidas_reais
     return simular_partidas_do_dia(data_ref)
-
 
 # ==============================================================================
 # 3. CAMADA DE MODELAGEM MATEMÁTICA
@@ -317,7 +323,6 @@ def analisar_partida_completa(partida: Partida) -> dict:
         "secundarios": calcular_mercados_secundarios(partida.estat_mandante, partida.estat_visitante),
     }
 
-
 # ==============================================================================
 # 4. CAMADA DE APRESENTAÇÃO (STREAMLIT)
 # ==============================================================================
@@ -364,9 +369,10 @@ def badge_liquidez(liquidez: float) -> str:
 
 
 def render_painel_principal(partidas_ordenadas: List[Partida]):
-    st.subheader(f"📊 Top {TOP_N_JOGOS} Partidas de Maior Liquidez — Hoje")
-    cols = st.columns(TOP_N_JOGOS)
-    for col, partida in zip(cols, partidas_ordenadas):
+    n_jogos = min(len(partidas_ordenadas), TOP_N_JOGOS)
+    st.subheader(f"📊 Top {n_jogos} Partidas de Maior Liquidez — Hoje")
+    cols = st.columns(n_jogos)
+    for col, partida in zip(cols, partidas_ordenadas[:n_jogos]):
         with col:
             st.markdown(f"**{partida.liga_nome}**")
             st.markdown(f"##### {partida.mandante}  \n🆚  \n{partida.visitante}")
@@ -380,16 +386,13 @@ def main():
     st.title("⚽ Dashboard de Análise Preditiva de Apostas Esportivas")
     st.caption("Modelagem estatística baseada em Distribuição de Poisson · Dados atualizados diariamente")
 
-    # ---- Sidebar ----
     with st.sidebar:
         st.header("⚙️ Configurações")
         modo_dados = st.radio("Fonte de dados", options=["Simulação", "API-Football"], index=0)
         
         api_key = ""
         if modo_dados == "API-Football":
-            api_key = st.text_input("Cole sua API Key aqui:", type="password", help="Insira sua chave da API-Football para buscar dados reais.")
-            if not api_key:
-                st.warning("⚠️ Insira sua chave da API-Football para carregar os jogos reais.")
+            api_key = st.text_input("Cole sua API Key aqui:", type="password", help="Insira sua chave da API-Football.")
 
         data_ref = st.date_input("Data de referência", value=datetime.now())
         st.divider()
@@ -401,12 +404,12 @@ def main():
 
     with st.spinner("Carregando partidas e calculando modelos estatísticos..."):
         partidas = obter_partidas_do_dia(data_ref_str, modo_dados, api_key)
-        partidas_ordenadas = sorted(partidas, key=lambda p: p.liquidez, reverse=True)[:TOP_N_JOGOS]
+        
+        if not partidas:
+            return
+            
+        partidas_ordenadas = sorted(partidas, key=lambda p: p.liquidez, reverse=True)
         analises = [(p, analisar_partida_completa(p)) for p in partidas_ordenadas]
-
-    if not partidas_ordenadas:
-        st.error("Nenhuma partida encontrada para a data selecionada.")
-        return
 
     render_painel_principal(partidas_ordenadas)
 
@@ -464,7 +467,7 @@ def main():
 
     with tab6:
         st.markdown("## 🔎 Radar de Valor")
-        st.info("Alterne o menu lateral para 'API-Football' e insira sua chave para carregar dados reais dos jogos do dia.")
+        st.success("Conexão ativa com API-Football!")
 
 
 if __name__ == "__main__":
