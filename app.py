@@ -12,7 +12,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo.
 
 import numpy as np
 import pandas as pd
