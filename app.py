@@ -2,7 +2,7 @@
 """
 app.py
 ==============================================================================
-SILVER BOOL — DASHBOARD DE ANÁLISE PREDITIVA DE APOSTAS ESPORTIVAS
+TAYSCORE — DASHBOARD DE ANÁLISE PREDITIVA DE APOSTAS ESPORTIVAS
 ==============================================================================
 """
 
@@ -26,7 +26,7 @@ from scipy.stats import poisson
 # ==============================================================================
 
 st.set_page_config(
-    page_title="SILVER BOOL",
+    page_title="TAYSCORE",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -90,7 +90,7 @@ st.markdown("""
     .summary-strip {
         display: flex;
         gap: 12px;
-        margin-bottom: 22px;
+        margin-bottom: 18px;
         flex-wrap: wrap;
     }
     .summary-chip {
@@ -757,7 +757,7 @@ def main():
     # Header com Visual Moderno
     st.markdown("""
     <div class="hero-container">
-        <div class="hero-title">⚽ SILVER BOOL</div>
+        <div class="hero-title">⚽ TAYSCORE</div>
         <div class="hero-subtitle">Análise Preditiva & Inteligência Esportiva de Alto Desempenho</div>
     </div>
     """, unsafe_allow_html=True)
@@ -786,11 +786,34 @@ def main():
         if not partidas:
             return
 
-        ligas_dict: Dict[str, List[Partida]] = {}
-        for p in partidas:
-            ligas_dict.setdefault(p.liga_nome, []).append(p)
+    st.markdown(render_summary_strip(len(partidas), len(set(p.liga_nome for p in partidas)), data_ref), unsafe_allow_html=True)
 
-    st.markdown(render_summary_strip(len(partidas), len(ligas_dict), data_ref), unsafe_allow_html=True)
+    # BARRA HORIZONTAL DE PESQUISAS DE JOGOS
+    termo_busca = st.text_input(
+        label="Pesquisar partidas",
+        placeholder="🔍 Digite o nome de um time ou competição para filtrar...",
+        label_visibility="collapsed"
+    ).strip().lower()
+
+    # Filtragem dos jogos com base na pesquisa
+    if termo_busca:
+        partidas_filtradas = [
+            p for p in partidas
+            if termo_busca in p.mandante.lower()
+            or termo_busca in p.visitante.lower()
+            or termo_busca in p.liga_nome.lower()
+        ]
+    else:
+        partidas_filtradas = partidas
+
+    if not partidas_filtradas:
+        st.info(f"Nenhum jogo encontrado para a busca '{termo_busca}'.")
+        return
+
+    # Agrupamento das partidas por liga
+    ligas_dict: Dict[str, List[Partida]] = {}
+    for p in partidas_filtradas:
+        ligas_dict.setdefault(p.liga_nome, []).append(p)
 
     for liga, lista_jogos in ligas_dict.items():
         st.markdown(f"""
