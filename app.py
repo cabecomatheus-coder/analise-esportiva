@@ -32,8 +32,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-TOP_N_JOGOS = 5
-
 # ==============================================================================
 # 2. CAMADA DE DADOS
 # ==============================================================================
@@ -48,6 +46,7 @@ class EstatisticasTime:
     cartoes_amarelos_media: float
     cartoes_vermelhos_media: float
     finalizacoes_gol_media: float
+    ultimos_5_jogos: List[str]
     forca_ataque: float = field(init=False)
     forca_defesa: float = field(init=False)
 
@@ -68,6 +67,13 @@ class Partida:
     estat_visitante: EstatisticasTime
 
 
+def _gerar_ultimos_jogos(seed: int) -> List[str]:
+    rng = random.Random(seed)
+    resultados = ["V", "E", "D"]
+    pesos = [0.45, 0.30, 0.25]
+    return rng.choices(resultados, weights=pesos, k=5)
+
+
 def _gerar_estatisticas_aleatorias(nome_time: str, seed: int) -> EstatisticasTime:
     rng = random.Random(seed)
     return EstatisticasTime(
@@ -79,6 +85,7 @@ def _gerar_estatisticas_aleatorias(nome_time: str, seed: int) -> EstatisticasTim
         cartoes_amarelos_media=round(rng.uniform(1.5, 3.2), 2),
         cartoes_vermelhos_media=round(rng.uniform(0.0, 0.25), 2),
         finalizacoes_gol_media=round(rng.uniform(3.0, 7.0), 2),
+        ultimos_5_jogos=_gerar_ultimos_jogos(seed),
     )
 
 
@@ -98,8 +105,15 @@ def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
             jogos = res_json.get("response", [])
             
             for item in jogos:
+                pais = str(item['league']['country']).strip()
+                liga_nome_bruto = str(item['league']['name']).strip()
+                
+                # Bloqueio do Campeonato e Times Russos
+                if "russia" in pais.lower() or "russia" in liga_nome_bruto.lower() or "russian" in liga_nome_bruto.lower():
+                    continue
+
                 f_id = str(item["fixture"]["id"])
-                liga_nome = f"{item['league']['name']} ({item['league']['country']})"
+                liga_nome = f"{liga_nome_bruto} ({pais})"
                 mandante_nome = item["teams"]["home"]["name"]
                 visitante_nome = item["teams"]["away"]["name"]
                 date_raw = item["fixture"]["date"]
@@ -312,11 +326,20 @@ def formatar_moeda(valor: float) -> str:
     return f"R$ {valor:.2f}"
 
 
+def formatar_forma(jogos: List[str]) -> str:
+    icones = []
+    for r in jogos:
+        if r == "V": icones.append("🟩 V")
+        elif r == "E": icones.append("🟨 E")
+        else: icones.append("🟥 D")
+    return " · ".join(icones)
+
+
 def grafico_probabilidades_1x2(probs: Dict[str, float], mandante: str, visitante: str):
     labels = [mandante, "Empate", visitante]
     valores = [probs["mandante"] * 100, probs["empate"] * 100, probs["visitante"] * 100]
     fig = go.Figure(data=[go.Bar(x=labels, y=valores, text=[f"{v:.1f}%" for v in valores], textposition="auto", marker_color=["#2E86DE", "#F1C40F", "#E74C3C"])])
-    fig.update_layout(title="Probabilidades Match Odds (1X2)", yaxis_title="Probabilidade (%)", height=350, margin=dict(t=50, b=20))
+    fig.update_layout(title="Probabilidades Match Odds (1X2)", yaxis_title="Probabilidade (%)", height=320, margin=dict(t=40, b=20))
     return fig
 
 
@@ -326,42 +349,69 @@ def grafico_over_under(dados_ou: Dict[float, Dict[str, float]], titulo: str):
         go.Bar(name="Over", x=[str(l) for l in linhas], y=[dados_ou[l]["over"] * 100 for l in linhas], marker_color="#27AE60"),
         go.Bar(name="Under", x=[str(l) for l in linhas], y=[dados_ou[l]["under"] * 100 for l in linhas], marker_color="#C0392B"),
     ])
-    fig.update_layout(barmode="group", title=titulo, yaxis_title="Probabilidade (%)", height=350)
+    fig.update_layout(barmode="group", title=titulo, yaxis_title="Probabilidade (%)", height=320)
     return fig
 
 
-def grafico_matriz_placares(matriz: np.ndarray, mandante: str, visitante: str, max_gols: int = 5):
-    sub_matriz = matriz[:max_gols + 1, :max_gols + 1] * 100
-    fig = px.imshow(sub_matriz, labels=dict(x=f"Gols {visitante}", y=f"Gols {mandante}", color="Prob. (%)"),
-                    x=[str(i) for i in range(max_gols + 1)], y=[str(i) for i in range(max_gols + 1)],
-                    text_auto=".1f", color_continuous_scale="Blues", aspect="auto")
-    fig.update_layout(title="Mapa de Calor — Placares Mais Prováveis", height=400)
-    return fig
+def render_detalhes_partida(partida: Partida, analise: dict):
+    p = analise["probs_1x2"]
+    ou = analise["over_under_gols"]
+    esc = analise["escanteios"]
+    sec = analise["secundarios"]
 
+    # --- Seção 1: Forma Recente e Médias ---
+    st.markdown("#### 📊 Retrospecto dos ÚLTIMOS 5 JOGOS e Estatísticas Média")
+    col_m, col_v = st.columns(2)
+    
+    with col_m:
+        st.markdown(f"**🏠 {partida.mandante}**")
+        st.markdown(f"**Forma Recente:** {formatar_forma(partida.estat_mandante.ultimos_5_jogos)}")
+        st.caption(f"⚽ Gols Marcados (média): {partida.estat_mandante.gols_marcados_media} | Sofridos: {partida.estat_mandante.gols_sofridos_media}")
+        st.caption(f"🚩 Cantos Pró (média): {partida.estat_mandante.escanteios_favor_media} | Cartões Amarelos: {partida.estat_mandante.cartoes_amarelos_media}")
 
-def badge_liquidez(liquidez: float) -> str:
-    if liquidez >= 2_000_000: return "🟢 Liquidez Alta"
-    if liquidez >= 800_000: return "🟡 Liquidez Média"
-    return "🔴 Liquidez Baixa"
+    with col_v:
+        st.markdown(f"**🚀 {partida.visitante}**")
+        st.markdown(f"**Forma Recente:** {formatar_forma(partida.estat_visitante.ultimos_5_jogos)}")
+        st.caption(f"⚽ Gols Marcados (média): {partida.estat_visitante.gols_marcados_media} | Sofridos: {partida.estat_visitante.gols_sofridos_media}")
+        st.caption(f"🚩 Cantos Pró (média): {partida.estat_visitante.escanteios_favor_media} | Cartões Amarelos: {partida.estat_visitante.cartoes_amarelos_media}")
 
-
-def render_painel_principal(partidas_ordenadas: List[Partida]):
-    n_jogos = min(len(partidas_ordenadas), TOP_N_JOGOS)
-    st.subheader(f"📊 Top {n_jogos} Partidas do Dia")
-    cols = st.columns(n_jogos)
-    for col, partida in zip(cols, partidas_ordenadas[:n_jogos]):
-        with col:
-            st.markdown(f"**{partida.liga_nome}**")
-            st.markdown(f"##### {partida.mandante}  \n🆚  \n{partida.visitante}")
-            st.metric(label="Horário", value=partida.horario.strftime("%H:%M"))
-            st.metric(label="Liquidez estimada", value=formatar_moeda(partida.liquidez))
-            st.caption(badge_liquidez(partida.liquidez))
     st.divider()
+
+    # --- Seção 2: Probabilidades e Odds Justas ---
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Match Odds (1X2)", "⚽ Gols", "🚩 Escanteios", "🟨 Cartões e Chutes"])
+
+    with tab1:
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"Vitória {partida.mandante}", f"{p['mandante']*100:.1f}%", f"Odd justa: {odd_justa(p['mandante'])}")
+        c2.metric("Empate", f"{p['empate']*100:.1f}%", f"Odd justa: {odd_justa(p['empate'])}")
+        c3.metric(f"Vitória {partida.visitante}", f"{p['visitante']*100:.1f}%", f"Odd justa: {odd_justa(p['visitante'])}")
+        st.plotly_chart(grafico_probabilidades_1x2(p, partida.mandante, partida.visitante), use_container_width=True)
+
+    with tab2:
+        cols = st.columns(len(ou))
+        for col, (linha, valores) in zip(cols, ou.items()):
+            with col:
+                st.metric(f"Over {linha}", f"{valores['over']*100:.1f}%", f"Odd: {odd_justa(valores['over'])}")
+                st.metric(f"Under {linha}", f"{valores['under']*100:.1f}%", f"Odd: {odd_justa(valores['under'])}")
+        st.plotly_chart(grafico_over_under(ou, "Probabilidade de Gols"), use_container_width=True)
+
+    with tab3:
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"Cantos {partida.mandante}", esc["lambda_mandante"])
+        c2.metric(f"Cantos {partida.visitante}", esc["lambda_visitante"])
+        c3.metric("Total Esperado", esc["total_esperado"])
+        st.plotly_chart(grafico_over_under(esc["over_under"], "Probabilidade de Escanteios"), use_container_width=True)
+
+    with tab4:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Amarelos Esperados", sec["cartoes_amarelos_esperados"])
+        c2.metric("Vermelhos Esperados", sec["cartoes_vermelhos_esperados"])
+        c3.metric("Finalizações no Gol", sec["finalizacoes_gol_esperadas"])
 
 
 def main():
     st.title("⚽ SILVER BOOL")
-    st.caption("Dashboard Analytics & Análise Preditiva de Apostas Esportivas · Distribuição de Poisson")
+    st.caption("Análise Preditiva e Estatísticas de Apostas Esportivas · Cobertura Total de Jogos")
 
     with st.sidebar:
         st.header("⚙️ SILVER BOOL — Painel")
@@ -379,72 +429,23 @@ def main():
 
     data_ref_str = data_ref.strftime("%Y-%m-%d")
 
-    with st.spinner("SILVER BOOL: Carregando e processando dados estatísticos..."):
+    with st.spinner("SILVER BOOL: Carregando todos os jogos da data..."):
         partidas = obter_partidas_do_dia(data_ref_str, modo_dados, api_key)
         
         if not partidas:
             return
-            
-        partidas_ordenadas = sorted(partidas, key=lambda p: p.liquidez, reverse=True)
-        analises = [(p, analisar_partida_completa(p)) for p in partidas_ordenadas]
 
-    render_painel_principal(partidas_ordenadas)
+        partidas_ordenadas = sorted(partidas, key=lambda p: p.horario)
 
-    opcoes_partida = [f"{p.liga_nome} — {p.mandante} x {p.visitante} ({p.horario.strftime('%H:%M')})" for p in partidas_ordenadas]
-    idx_selecionado = st.selectbox("Selecione qualquer partida para análise detalhada:", options=range(len(opcoes_partida)), format_func=lambda i: opcoes_partida[i])
-    partida_sel, analise_sel = analises[idx_selecionado]
+    st.subheader(f"📋 Lista Completa de Jogos do Dia ({len(partidas_ordenadas)} partidas encontradas)")
+    st.info("💡 Clique sobre qualquer partida abaixo para expandir e visualizar as estatísticas completas, os últimos 5 jogos e as probabilidades.")
 
-    st.markdown(f"## 🏟️ {partida_sel.mandante} x {partida_sel.visitante}")
-    st.caption(f"{partida_sel.liga_nome} · {partida_sel.horario.strftime('%d/%m/%Y às %H:%M')} · Liquidez: {formatar_moeda(partida_sel.liquidez)}")
-
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🎯 Match Odds (1X2)", "⚽ Gols", "🚩 Escanteios", "⚖️ Handicap Asiático", "🟨 Secundários", "🔎 Radar de Valor"])
-
-    with tab1:
-        st.markdown("### 🎯 Mercado Match Odds (1X2)")
-        c1, c2, c3 = st.columns(3)
-        p = analise_sel["probs_1x2"]
-        c1.metric(f"Vitória {partida_sel.mandante}", f"{p['mandante']*100:.1f}%", f"Odd justa: {odd_justa(p['mandante'])}")
-        c2.metric("Empate", f"{p['empate']*100:.1f}%", f"Odd justa: {odd_justa(p['empate'])}")
-        c3.metric(f"Vitória {partida_sel.visitante}", f"{p['visitante']*100:.1f}%", f"Odd justa: {odd_justa(p['visitante'])}")
-        col_graf1, col_graf2 = st.columns(2)
-        with col_graf1: st.plotly_chart(grafico_probabilidades_1x2(p, partida_sel.mandante, partida_sel.visitante), use_container_width=True)
-        with col_graf2: st.plotly_chart(grafico_matriz_placares(analise_sel["matriz_placares"], partida_sel.mandante, partida_sel.visitante), use_container_width=True)
-
-    with tab2:
-        st.markdown("### ⚽ Mercado de Gols")
-        ou = analise_sel["over_under_gols"]
-        cols = st.columns(len(ou))
-        for col, (linha, valores) in zip(cols, ou.items()):
-            with col:
-                st.metric(f"Over {linha}", f"{valores['over']*100:.1f}%", f"Odd: {odd_justa(valores['over'])}")
-                st.metric(f"Under {linha}", f"{valores['under']*100:.1f}%", f"Odd: {odd_justa(valores['under'])}")
-        st.plotly_chart(grafico_over_under(ou, "Over/Under Gols"), use_container_width=True)
-
-    with tab3:
-        st.markdown("### 🚩 Mercado de Escanteios")
-        esc = analise_sel["escanteios"]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Cantos Mandante", esc["lambda_mandante"])
-        c2.metric("Cantos Visitante", esc["lambda_visitante"])
-        c3.metric("Total Esperado", esc["total_esperado"])
-        st.plotly_chart(grafico_over_under(esc["over_under"], "Over/Under Escanteios"), use_container_width=True)
-
-    with tab4:
-        st.markdown("### ⚖️ Handicap Asiático")
-        h = analise_sel["handicap"]
-        st.metric("Linha sugerida", f"{partida_sel.mandante if h['favorito']=='Mandante' else partida_sel.visitante}  {'-' if h['favorito']=='Mandante' else '+'}{abs(h['linha_sugerida'])}")
-
-    with tab5:
-        st.markdown("### 🟨 Mercados Secundários")
-        sec = analise_sel["secundarios"]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Amarelos", sec["cartoes_amarelos_esperados"])
-        c2.metric("Vermelhos", sec["cartoes_vermelhos_esperados"])
-        c3.metric("Finalizações", sec["finalizacoes_gol_esperadas"])
-
-    with tab6:
-        st.markdown("## 🔎 Radar de Valor")
-        st.success("SILVER BOOL: Conexão ativa com a base de dados!")
+    for p in partidas_ordenadas:
+        analise = analisar_partida_completa(p)
+        titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} — [{p.liga_nome}] {p.mandante} x {p.visitante}"
+        
+        with st.expander(titulo_expander):
+            render_detalhes_partida(p, analise)
 
 
 if __name__ == "__main__":
