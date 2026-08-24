@@ -102,49 +102,54 @@ def buscar_partidas_api_real(data: str, api_key: str) -> List[Partida]:
         "x-rapidapi-host": "v3.football.api-sports.io"
     }
     partidas = []
+    ano_atual = datetime.strptime(data, "%Y-%m-%d").year
+    seasons_para_testar = [ano_atual, ano_atual - 1]
     
     for liga_cod, liga_info in LIGAS_PRINCIPAIS.items():
-        url = "https://v3.football.api-sports.io/fixtures"
-        params = {
-            "date": data,
-            "league": liga_info["api_id"],
-            "season": datetime.strptime(data, "%Y-%m-%d").year
-        }
-        
-        try:
-            resp = requests.get(url, headers=headers, params=params, timeout=10)
-            if resp.status_code == 200:
-                res_json = resp.json()
-                jogos = res_json.get("response", [])
-                
-                for item in jogos:
-                    f_id = str(item["fixture"]["id"])
-                    mandante_nome = item["teams"]["home"]["name"]
-                    visitante_nome = item["teams"]["away"]["name"]
-                    date_raw = item["fixture"]["date"]
-                    horario = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
-                    
-                    seed_m = abs(hash(mandante_nome)) % 10000
-                    seed_v = abs(hash(visitante_nome)) % 10000
-                    
-                    estat_m = _gerar_estatisticas_aleatorias(mandante_nome, seed_m)
-                    estat_v = _gerar_estatisticas_aleatorias(visitante_nome, seed_v)
-                    
-                    rng_liq = random.Random(f_id)
-                    liquidez = round(rng_liq.uniform(300_000, 5_000_000), 2)
-                    
-                    partidas.append(Partida(
-                        id=f_id,
-                        liga_codigo=liga_cod,
-                        mandante=mandante_nome,
-                        visitante=visitante_nome,
-                        horario=horario,
-                        liquidez=liquidez,
-                        estat_mandante=estat_m,
-                        estat_visitante=estat_v,
-                    ))
-        except Exception as exc:
-            st.warning(f"Erro ao buscar liga {liga_info['nome']}: {exc}")
+        jogos = []
+        for season in seasons_para_testar:
+            url = "https://v3.football.api-sports.io/fixtures"
+            params = {
+                "date": data,
+                "league": liga_info["api_id"],
+                "season": season
+            }
+            try:
+                resp = requests.get(url, headers=headers, params=params, timeout=10)
+                if resp.status_code == 200:
+                    res_json = resp.json()
+                    jogos = res_json.get("response", [])
+                    if jogos:
+                        break
+            except Exception:
+                pass
+
+        for item in jogos:
+            f_id = str(item["fixture"]["id"])
+            mandante_nome = item["teams"]["home"]["name"]
+            visitante_nome = item["teams"]["away"]["name"]
+            date_raw = item["fixture"]["date"]
+            horario = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+            
+            seed_m = abs(hash(mandante_nome)) % 10000
+            seed_v = abs(hash(visitante_nome)) % 10000
+            
+            estat_m = _gerar_estatisticas_aleatorias(mandante_nome, seed_m)
+            estat_v = _gerar_estatisticas_aleatorias(visitante_nome, seed_v)
+            
+            rng_liq = random.Random(f_id)
+            liquidez = round(rng_liq.uniform(300_000, 5_000_000), 2)
+            
+            partidas.append(Partida(
+                id=f_id,
+                liga_codigo=liga_cod,
+                mandante=mandante_nome,
+                visitante=visitante_nome,
+                horario=horario,
+                liquidez=liquidez,
+                estat_mandante=estat_m,
+                estat_visitante=estat_v,
+            ))
             
     return partidas
 
@@ -200,7 +205,7 @@ def obter_partidas_do_dia(data_ref: str, modo: str, api_key: str) -> List[Partid
             return []
         partidas_reais = buscar_partidas_api_real(data_ref, api_key)
         if not partidas_reais:
-            st.warning("Nenhum jogo encontrado nas ligas monitoradas para esta data na API.")
+            st.warning("Nenhum jogo encontrado nas 7 ligas monitoradas para esta data na API.")
             return []
         return partidas_reais
     return simular_partidas_do_dia(data_ref)
