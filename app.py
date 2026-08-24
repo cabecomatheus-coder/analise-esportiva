@@ -401,6 +401,12 @@ def main():
 
         data_ref = st.date_input("Data de referência", value=datetime.now())
         st.divider()
+        
+        # Link rápido para o Flashscore
+        st.markdown("**🔗 Atalhos Externos:**")
+        st.link_button("🌐 Consultar Flashscore", "https://www.flashscore.com.br/", use_container_width=True)
+        
+        st.divider()
         st.markdown("**Ligas monitoradas:**")
         for liga in LIGAS_PRINCIPAIS.values():
             st.caption(f"• {liga['nome']} ({liga['pais']})")
