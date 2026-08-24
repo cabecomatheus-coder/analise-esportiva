@@ -2,7 +2,7 @@
 """
 app.py
 ==============================================================================
-DASHBOARD DE ANÁLISE PREDITIVA DE APOSTAS ESPORTIVAS
+SILVER BOOL — DASHBOARD DE ANÁLISE PREDITIVA DE APOSTAS ESPORTIVAS
 ==============================================================================
 """
 
@@ -26,21 +26,11 @@ from scipy.stats import poisson
 # ==============================================================================
 
 st.set_page_config(
-    page_title="Analytics Betting Dashboard",
+    page_title="SILVER BOOL",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-LIGAS_PRINCIPAIS = {
-    "PL":   {"nome": "Premier League",        "pais": "Inglaterra", "api_id": 39},
-    "UCL":  {"nome": "Champions League",      "pais": "Europa",     "api_id": 2},
-    "BSA":  {"nome": "Brasileirão Série A",   "pais": "Brasil",     "api_id": 71},
-    "LALIGA": {"nome": "La Liga",             "pais": "Espanha",    "api_id": 140},
-    "SERIEA": {"nome": "Serie A Italiana",    "pais": "Itália",     "api_id": 135},
-    "BUNDES": {"nome": "Bundesliga",          "pais": "Alemanha",   "api_id": 78},
-    "LIBERTA": {"nome": "Libertadores",       "pais": "América do Sul", "api_id": 13},
-}
 
 TOP_N_JOGOS = 5
 
@@ -69,17 +59,13 @@ class EstatisticasTime:
 @dataclass
 class Partida:
     id: str
-    liga_codigo: str
+    liga_nome: str
     mandante: str
     visitante: str
     horario: datetime
     liquidez: float
     estat_mandante: EstatisticasTime
     estat_visitante: EstatisticasTime
-
-    @property
-    def liga_nome(self) -> str:
-        return LIGAS_PRINCIPAIS.get(self.liga_codigo, {}).get("nome", "Liga Desconhecida")
 
 
 def _gerar_estatisticas_aleatorias(nome_time: str, seed: int) -> EstatisticasTime:
@@ -96,88 +82,75 @@ def _gerar_estatisticas_aleatorias(nome_time: str, seed: int) -> EstatisticasTim
     )
 
 
-def buscar_partidas_api_real(data: str, api_key: str) -> List[Partida]:
+def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
     headers = {
         "x-apisports-key": api_key,
         "x-rapidapi-host": "v3.football.api-sports.io"
     }
     partidas = []
-    ano_atual = datetime.strptime(data, "%Y-%m-%d").year
-    seasons_para_testar = [ano_atual, ano_atual - 1]
+    url = "https://v3.football.api-sports.io/fixtures"
+    params = {"date": data}
     
-    for liga_cod, liga_info in LIGAS_PRINCIPAIS.items():
-        jogos = []
-        for season in seasons_para_testar:
-            url = "https://v3.football.api-sports.io/fixtures"
-            params = {
-                "date": data,
-                "league": liga_info["api_id"],
-                "season": season
-            }
-            try:
-                resp = requests.get(url, headers=headers, params=params, timeout=10)
-                if resp.status_code == 200:
-                    res_json = resp.json()
-                    jogos = res_json.get("response", [])
-                    if jogos:
-                        break
-            except Exception:
-                pass
-
-        for item in jogos:
-            f_id = str(item["fixture"]["id"])
-            mandante_nome = item["teams"]["home"]["name"]
-            visitante_nome = item["teams"]["away"]["name"]
-            date_raw = item["fixture"]["date"]
-            horario = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=12)
+        if resp.status_code == 200:
+            res_json = resp.json()
+            jogos = res_json.get("response", [])
             
-            seed_m = abs(hash(mandante_nome)) % 10000
-            seed_v = abs(hash(visitante_nome)) % 10000
-            
-            estat_m = _gerar_estatisticas_aleatorias(mandante_nome, seed_m)
-            estat_v = _gerar_estatisticas_aleatorias(visitante_nome, seed_v)
-            
-            rng_liq = random.Random(f_id)
-            liquidez = round(rng_liq.uniform(300_000, 5_000_000), 2)
-            
-            partidas.append(Partida(
-                id=f_id,
-                liga_codigo=liga_cod,
-                mandante=mandante_nome,
-                visitante=visitante_nome,
-                horario=horario,
-                liquidez=liquidez,
-                estat_mandante=estat_m,
-                estat_visitante=estat_v,
-            ))
+            for item in jogos:
+                f_id = str(item["fixture"]["id"])
+                liga_nome = f"{item['league']['name']} ({item['league']['country']})"
+                mandante_nome = item["teams"]["home"]["name"]
+                visitante_nome = item["teams"]["away"]["name"]
+                date_raw = item["fixture"]["date"]
+                horario = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+                
+                seed_m = abs(hash(mandante_nome)) % 10000
+                seed_v = abs(hash(visitante_nome)) % 10000
+                
+                estat_m = _gerar_estatisticas_aleatorias(mandante_nome, seed_m)
+                estat_v = _gerar_estatisticas_aleatorias(visitante_nome, seed_v)
+                
+                rng_liq = random.Random(f_id)
+                liquidez = round(rng_liq.uniform(50_000, 3_000_000), 2)
+                
+                partidas.append(Partida(
+                    id=f_id,
+                    liga_nome=liga_nome,
+                    mandante=mandante_nome,
+                    visitante=visitante_nome,
+                    horario=horario,
+                    liquidez=liquidez,
+                    estat_mandante=estat_m,
+                    estat_visitante=estat_v,
+                ))
+    except Exception as e:
+        st.error(f"Erro na conexão com a API: {e}")
             
     return partidas
 
 
-_TIMES_POR_LIGA = {
-    "PL":   ["Manchester City", "Arsenal", "Liverpool", "Chelsea", "Tottenham", "Aston Villa"],
-    "UCL":  ["Real Madrid", "Bayern de Munique", "PSG", "Inter de Milão", "Man City", "Barcelona"],
-    "BSA":  ["Palmeiras", "Flamengo", "Botafogo", "Grêmio", "São Paulo", "Atlético-MG"],
-    "LALIGA": ["Real Madrid", "Barcelona", "Atlético de Madrid", "Girona", "Real Sociedad", "Betis"],
-    "SERIEA": ["Inter de Milão", "Juventus", "AC Milan", "Napoli", "Roma", "Atalanta"],
-    "BUNDES": ["Bayer Leverkusen", "Bayern de Munique", "RB Leipzig", "Borussia Dortmund", "Stuttgart"],
-    "LIBERTA": ["Palmeiras", "Boca Juniors", "River Plate", "Fluminense", "Botafogo", "Peñarol"],
-}
+_TIMES_MUNDO = [
+    ("Premier League (Inglaterra)", "Manchester City", "Arsenal"),
+    ("Brasileirão Série A (Brasil)", "Palmeiras", "Flamengo"),
+    ("La Liga (Espanha)", "Real Madrid", "Barcelona"),
+    ("Serie A (Itália)", "Inter de Milão", "Juventus"),
+    ("Bundesliga (Alemanha)", "Bayern de Munique", "Bayer Leverkusen"),
+    ("Primera División (Argentina)", "Boca Juniors", "River Plate"),
+    ("Primeira Liga (Portugal)", "Benfica", "Porto"),
+    ("Süper Lig (Turquia)", "Galatasaray", "Fenerbahçe"),
+]
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def simular_partidas_do_dia(data_ref: str) -> List[Partida]:
     partidas = []
     seed_base = int(pd.Timestamp(data_ref).strftime("%Y%m%d"))
-    contador = 0
-    for liga_cod, times in _TIMES_POR_LIGA.items():
-        rng = random.Random(seed_base + hash(liga_cod) % 1000)
-        times_embaralhados = times.copy()
-        rng.shuffle(times_embaralhados)
-        mandante, visitante = times_embaralhados[0], times_embaralhados[1]
-
-        estat_mandante = _gerar_estatisticas_aleatorias(mandante, seed_base + contador)
-        estat_visitante = _gerar_estatisticas_aleatorias(visitante, seed_base + contador + 500)
+    
+    for i, (liga, mandante, visitante) in enumerate(_TIMES_MUNDO):
+        rng = random.Random(seed_base + i)
+        estat_mandante = _gerar_estatisticas_aleatorias(mandante, seed_base + i)
+        estat_visitante = _gerar_estatisticas_aleatorias(visitante, seed_base + i + 500)
 
         horario = datetime.strptime(data_ref, "%Y-%m-%d") + timedelta(
             hours=rng.choice([12, 14, 16, 17, 18, 20, 21]), minutes=rng.choice([0, 15, 30, 45])
@@ -185,8 +158,8 @@ def simular_partidas_do_dia(data_ref: str) -> List[Partida]:
         liquidez = round(rng.uniform(150_000, 4_500_000), 2)
 
         partidas.append(Partida(
-            id=f"{liga_cod}_{contador}",
-            liga_codigo=liga_cod,
+            id=f"sim_{i}",
+            liga_nome=liga,
             mandante=mandante,
             visitante=visitante,
             horario=horario,
@@ -194,7 +167,6 @@ def simular_partidas_do_dia(data_ref: str) -> List[Partida]:
             estat_mandante=estat_mandante,
             estat_visitante=estat_visitante,
         ))
-        contador += 1
     return partidas
 
 
@@ -203,9 +175,9 @@ def obter_partidas_do_dia(data_ref: str, modo: str, api_key: str) -> List[Partid
         if not api_key:
             st.error("Insira sua API Key no menu lateral para carregar dados reais.")
             return []
-        partidas_reais = buscar_partidas_api_real(data_ref, api_key)
+        partidas_reais = buscar_partidas_api_global(data_ref, api_key)
         if not partidas_reais:
-            st.warning("Nenhum jogo encontrado nas 7 ligas monitoradas para esta data na API.")
+            st.warning("Nenhum jogo retornado pela API para esta data.")
             return []
         return partidas_reais
     return simular_partidas_do_dia(data_ref)
@@ -375,7 +347,7 @@ def badge_liquidez(liquidez: float) -> str:
 
 def render_painel_principal(partidas_ordenadas: List[Partida]):
     n_jogos = min(len(partidas_ordenadas), TOP_N_JOGOS)
-    st.subheader(f"📊 Top {n_jogos} Partidas de Maior Liquidez — Hoje")
+    st.subheader(f"📊 Top {n_jogos} Partidas do Dia")
     cols = st.columns(n_jogos)
     for col, partida in zip(cols, partidas_ordenadas[:n_jogos]):
         with col:
@@ -388,11 +360,11 @@ def render_painel_principal(partidas_ordenadas: List[Partida]):
 
 
 def main():
-    st.title("⚽ Dashboard de Análise Preditiva de Apostas Esportivas")
-    st.caption("Modelagem estatística baseada em Distribuição de Poisson · Dados atualizados diariamente")
+    st.title("⚽ SILVER BOOL")
+    st.caption("Dashboard Analytics & Análise Preditiva de Apostas Esportivas · Distribuição de Poisson")
 
     with st.sidebar:
-        st.header("⚙️ Configurações")
+        st.header("⚙️ SILVER BOOL — Painel")
         modo_dados = st.radio("Fonte de dados", options=["Simulação", "API-Football"], index=0)
         
         api_key = ""
@@ -402,18 +374,12 @@ def main():
         data_ref = st.date_input("Data de referência", value=datetime.now())
         st.divider()
         
-        # Link rápido para o Flashscore
         st.markdown("**🔗 Atalhos Externos:**")
         st.link_button("🌐 Consultar Flashscore", "https://www.flashscore.com.br/", use_container_width=True)
-        
-        st.divider()
-        st.markdown("**Ligas monitoradas:**")
-        for liga in LIGAS_PRINCIPAIS.values():
-            st.caption(f"• {liga['nome']} ({liga['pais']})")
 
     data_ref_str = data_ref.strftime("%Y-%m-%d")
 
-    with st.spinner("Carregando partidas e calculando modelos estatísticos..."):
+    with st.spinner("SILVER BOOL: Carregando e processando dados estatísticos..."):
         partidas = obter_partidas_do_dia(data_ref_str, modo_dados, api_key)
         
         if not partidas:
@@ -425,7 +391,7 @@ def main():
     render_painel_principal(partidas_ordenadas)
 
     opcoes_partida = [f"{p.liga_nome} — {p.mandante} x {p.visitante} ({p.horario.strftime('%H:%M')})" for p in partidas_ordenadas]
-    idx_selecionado = st.selectbox("Selecione uma partida para análise detalhada:", options=range(len(opcoes_partida)), format_func=lambda i: opcoes_partida[i])
+    idx_selecionado = st.selectbox("Selecione qualquer partida para análise detalhada:", options=range(len(opcoes_partida)), format_func=lambda i: opcoes_partida[i])
     partida_sel, analise_sel = analises[idx_selecionado]
 
     st.markdown(f"## 🏟️ {partida_sel.mandante} x {partida_sel.visitante}")
@@ -478,7 +444,7 @@ def main():
 
     with tab6:
         st.markdown("## 🔎 Radar de Valor")
-        st.success("Conexão ativa com API-Football!")
+        st.success("SILVER BOOL: Conexão ativa com a base de dados!")
 
 
 if __name__ == "__main__":
