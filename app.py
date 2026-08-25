@@ -436,7 +436,21 @@ def _gerar_estatisticas_aleatorias(nome_time: str, seed: int) -> EstatisticasTim
     )
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
 def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
+    """
+    Busca partidas reais na API-Football.
+
+    Cacheada por 30 minutos (por combinação de data + api_key) para evitar que
+    cada clique na interface (abrir uma partida, marcar favorito, trocar de aba)
+    dispare uma nova chamada à API e consuma a cota de requisições do plano.
+
+    Também trata o caso em que a API-Football responde com status HTTP 200
+    mas inclui um campo "errors" no corpo (chave inválida, limite de
+    requisições atingido, plano sem acesso àquela liga/data, etc.) — sem essa
+    checagem, esses erros passavam despercebidos e o app só mostrava
+    "nenhum jogo encontrado", escondendo a causa real.
+    """
     headers = {
         "x-apisports-key": api_key,
         "x-rapidapi-host": "v3.football.api-sports.io"
@@ -447,37 +461,59 @@ def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
 
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=12)
-        if resp.status_code == 200:
-            jogos = resp.json().get("response", [])
-            for item in jogos:
-                pais = str(item['league']['country']).strip()
-                liga_nome_bruto = str(item['league']['name']).strip()
 
-                if "russia" in pais.lower() or "russia" in liga_nome_bruto.lower():
-                    continue
+        if resp.status_code != 200:
+            st.error(f"Erro na API (status {resp.status_code}): {resp.text[:300]}")
+            return []
 
-                f_id = str(item["fixture"]["id"])
-                liga_nome = f"{liga_nome_bruto} ({pais})"
-                mandante_nome = item["teams"]["home"]["name"]
-                visitante_nome = item["teams"]["away"]["name"]
+        corpo = resp.json()
 
-                date_raw = item["fixture"]["date"]
-                horario_utc = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
-                horario_local = horario_utc.astimezone(FUSO_BRASIL)
+        # A API-Football costuma responder com status 200 mesmo quando há erro
+        # (limite de requisições diário/por minuto, chave inválida, plano sem
+        # acesso àquela data/liga, parâmetro faltando, etc.)
+        erros = corpo.get("errors")
+        if erros:
+            st.error(f"A API-Football retornou um erro: {erros}")
+            return []
 
-                seed_m = _seed_estavel(mandante_nome)
-                seed_v = _seed_estavel(visitante_nome)
+        jogos = corpo.get("response", [])
 
-                partidas.append(Partida(
-                    id=f_id,
-                    liga_nome=liga_nome,
-                    mandante=mandante_nome,
-                    visitante=visitante_nome,
-                    horario=horario_local,
-                    liquidez=round(random.Random(f_id).uniform(50_000, 3_000_000), 2),
-                    estat_mandante=_gerar_estatisticas_aleatorias(mandante_nome, seed_m),
-                    estat_visitante=_gerar_estatisticas_aleatorias(visitante_nome, seed_v),
-                ))
+        if not jogos:
+            st.info(
+                "A API não retornou nenhuma partida para esta data. "
+                "Planos gratuitos da API-Football costumam ter acesso limitado "
+                "a ligas e temporadas específicas — verifique o plano da sua chave."
+            )
+
+        for item in jogos:
+            pais = str(item['league']['country']).strip()
+            liga_nome_bruto = str(item['league']['name']).strip()
+
+            if "russia" in pais.lower() or "russia" in liga_nome_bruto.lower():
+                continue
+
+            f_id = str(item["fixture"]["id"])
+            liga_nome = f"{liga_nome_bruto} ({pais})"
+            mandante_nome = item["teams"]["home"]["name"]
+            visitante_nome = item["teams"]["away"]["name"]
+
+            date_raw = item["fixture"]["date"]
+            horario_utc = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+            horario_local = horario_utc.astimezone(FUSO_BRASIL)
+
+            seed_m = _seed_estavel(mandante_nome)
+            seed_v = _seed_estavel(visitante_nome)
+
+            partidas.append(Partida(
+                id=f_id,
+                liga_nome=liga_nome,
+                mandante=mandante_nome,
+                visitante=visitante_nome,
+                horario=horario_local,
+                liquidez=round(random.Random(f_id).uniform(50_000, 3_000_000), 2),
+                estat_mandante=_gerar_estatisticas_aleatorias(mandante_nome, seed_m),
+                estat_visitante=_gerar_estatisticas_aleatorias(visitante_nome, seed_v),
+            ))
     except Exception as e:
         st.error(f"Erro na conexão com a API: {e}")
 
@@ -530,7 +566,6 @@ def obter_partidas_do_dia(data_ref: str, modo: str, api_key: str) -> List[Partid
             return []
         partidas_reais = buscar_partidas_api_global(data_ref, api_key)
         if not partidas_reais:
-            st.warning("Nenhum jogo retornado pela API para esta data.")
             return []
         return partidas_reais
     return simular_partidas_do_dia(data_ref)
@@ -936,6 +971,12 @@ def main():
             api_key = st.text_input("Cole sua API Key:", type="password", help="Insira sua chave da API-Football.")
 
         data_ref = st.date_input("Data dos Jogos", value=datetime.now(FUSO_BRASIL))
+
+        if modo_dados == "API-Football" and api_key:
+            if st.button("🔄 Forçar atualização (limpar cache)", use_container_width=True):
+                buscar_partidas_api_global.clear()
+                st.rerun()
+
         st.divider()
         st.link_button("🌐 Consultar Flashscore", "https://www.flashscore.com.br/", use_container_width=True)
         st.markdown(
