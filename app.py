@@ -295,10 +295,38 @@ st.markdown("""
     }
 
     /* ============ LINHA DE PARTIDA (ESTRELA + EXPANDER) ============ */
+    /* Cada linha vira um único bloco flex compacto: caixinha da estrela + expander,
+       colados um no outro, sem sobra de espaço vertical/horizontal entre os dois. */
+    .linha-partida {
+        margin-bottom: 6px;
+    }
+    .linha-partida div[data-testid="stHorizontalBlock"] {
+        gap: 8px !important;
+        align-items: flex-start !important;
+    }
+    .linha-partida div[data-testid="column"] {
+        padding: 0 !important;
+        width: fit-content !important;
+        min-width: 0 !important;
+        flex: 0 0 auto !important;
+    }
+    .linha-partida div[data-testid="column"]:last-child {
+        flex: 1 1 auto !important;
+        width: 100% !important;
+    }
+    .linha-partida div[data-testid="stExpander"] {
+        margin-bottom: 0 !important;
+    }
+    /* Caixinha da estrela: quadrado pequeno e fixo, alinhado com o topo do expander */
     .linha-partida div[data-testid="column"]:first-child button {
-        border-radius: 50%;
-        padding: 0.25rem 0.5rem;
+        width: 40px !important;
+        height: 40px !important;
+        min-width: 40px !important;
+        padding: 0 !important;
+        border-radius: 10px;
         border-color: #30363d;
+        font-size: 1rem;
+        line-height: 1;
     }
     .linha-partida div[data-testid="column"]:first-child button:hover {
         border-color: #F7B731;
@@ -825,14 +853,15 @@ def toggle_favorito(partida_id: str):
 
 
 def render_partida_com_estrela(p: Partida, key_prefix: str):
-    """Renderiza uma linha de partida: botão de estrela (favoritar) + expander com os detalhes."""
+    """Renderiza uma linha de partida: caixinha compacta com a estrela (favoritar) + expander com os detalhes,
+    lado a lado e sem espaçamento extra entre uma partida e a próxima."""
     analise = analisar_partida_completa(p)
     is_fav = p.id in st.session_state.favoritos
     fogo = " 🔥" if p.liquidez >= 2_000_000 else ""
     titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} — {p.mandante} x {p.visitante}{fogo}"
 
     st.markdown('<div class="linha-partida">', unsafe_allow_html=True)
-    col_estrela, col_expander = st.columns([0.045, 0.955])
+    col_estrela, col_expander = st.columns([0.06, 0.94], gap="small")
     with col_estrela:
         st.button(
             "⭐" if is_fav else "☆",
@@ -840,7 +869,6 @@ def render_partida_com_estrela(p: Partida, key_prefix: str):
             help="Remover dos favoritos" if is_fav else "Marcar como favorito",
             on_click=toggle_favorito,
             args=(p.id,),
-            use_container_width=True,
         )
     with col_expander:
         with st.expander(titulo_expander):
