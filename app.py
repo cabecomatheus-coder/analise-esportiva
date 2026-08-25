@@ -278,59 +278,59 @@ st.markdown("""
     .liq-mid { background: rgba(247,183,49,0.15); color: #F7B731; border: 1px solid #9e6a03; }
     .liq-low { background: rgba(139,148,158,0.15); color: #8b949e; border: 1px solid #30363d; }
 
-    /* ============ EXPANDERS (CONFRONTOS) ============ */
-    .streamlit-expanderHeader, div[data-testid="stExpander"] summary {
-        background-color: #161b22 !important;
-        border-radius: 10px !important;
-        border: 1px solid #30363d !important;
-        font-weight: 600 !important;
-        color: #c9d1d9 !important;
-    }
-    div[data-testid="stExpander"] summary:hover {
-        border-color: #38ef7d !important;
-    }
-    div[data-testid="stExpander"] {
-        border: none !important;
-        margin-bottom: 8px;
-    }
-
-    /* ============ LINHA DE PARTIDA (ESTRELA + EXPANDER) ============ */
-    /* Cada linha vira um único bloco flex compacto: caixinha da estrela + expander,
-       colados um no outro, sem sobra de espaço vertical/horizontal entre os dois. */
+    /* ============ LINHA DE PARTIDA (CARD ÚNICO: ESTRELA + CABEÇALHO) ============ */
+    /* A estrela e o título/expansor da partida agora ficam DENTRO da mesma caixa
+       (um único container com borda), lado a lado, sem espaço entre eles. */
     .linha-partida {
         margin-bottom: 6px;
     }
+    .linha-partida > div[data-testid="stVerticalBlockBorderWrapper"] {
+        border: 1px solid #30363d !important;
+        border-radius: 10px !important;
+        padding: 6px 10px !important;
+        background-color: #161b22;
+        transition: border-color 0.2s ease;
+    }
+    .linha-partida > div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+        border-color: #3a4048 !important;
+    }
     .linha-partida div[data-testid="stHorizontalBlock"] {
         gap: 8px !important;
-        align-items: flex-start !important;
+        align-items: center !important;
     }
     .linha-partida div[data-testid="column"] {
         padding: 0 !important;
-        width: fit-content !important;
-        min-width: 0 !important;
-        flex: 0 0 auto !important;
     }
-    .linha-partida div[data-testid="column"]:last-child {
-        flex: 1 1 auto !important;
-        width: 100% !important;
-    }
-    .linha-partida div[data-testid="stExpander"] {
-        margin-bottom: 0 !important;
-    }
-    /* Caixinha da estrela: quadrado pequeno e fixo, alinhado com o topo do expander */
+    /* Botão da estrela: quadrado pequeno e fixo */
     .linha-partida div[data-testid="column"]:first-child button {
-        width: 40px !important;
-        height: 40px !important;
-        min-width: 40px !important;
+        width: 34px !important;
+        height: 34px !important;
+        min-width: 34px !important;
         padding: 0 !important;
-        border-radius: 10px;
+        border-radius: 8px;
         border-color: #30363d;
-        font-size: 1rem;
+        font-size: 0.95rem;
         line-height: 1;
+        background-color: transparent;
     }
     .linha-partida div[data-testid="column"]:first-child button:hover {
         border-color: #F7B731;
         color: #F7B731;
+    }
+    /* Botão do título: parece texto clicável, não um botão tradicional */
+    .linha-partida div[data-testid="column"]:last-child button {
+        background-color: transparent !important;
+        border: none !important;
+        justify-content: flex-start !important;
+        text-align: left !important;
+        font-weight: 600 !important;
+        color: #c9d1d9 !important;
+        padding: 6px 4px !important;
+        font-size: 0.92rem !important;
+    }
+    .linha-partida div[data-testid="column"]:last-child button:hover {
+        color: #38ef7d !important;
+        border: none !important;
     }
 
     /* ============ TABS ============ */
@@ -853,25 +853,36 @@ def toggle_favorito(partida_id: str):
 
 
 def render_partida_com_estrela(p: Partida, key_prefix: str):
-    """Renderiza uma linha de partida: caixinha compacta com a estrela (favoritar) + expander com os detalhes,
-    lado a lado e sem espaçamento extra entre uma partida e a próxima."""
+    """Renderiza uma partida como um ÚNICO card: a estrela de favorito e o cabeçalho
+    (horário + times) ficam lado a lado, dentro da mesma caixa com borda.
+    Os detalhes completos aparecem abaixo, dentro do mesmo card, ao clicar no cabeçalho."""
     analise = analisar_partida_completa(p)
     is_fav = p.id in st.session_state.favoritos
     fogo = " 🔥" if p.liquidez >= 2_000_000 else ""
-    titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} — {p.mandante} x {p.visitante}{fogo}"
+    titulo = f"⏰ {p.horario.strftime('%H:%M')} — {p.mandante} x {p.visitante}{fogo}"
+
+    expand_key = f"{key_prefix}_aberto_{p.id}"
+    if expand_key not in st.session_state:
+        st.session_state[expand_key] = False
 
     st.markdown('<div class="linha-partida">', unsafe_allow_html=True)
-    col_estrela, col_expander = st.columns([0.06, 0.94], gap="small")
-    with col_estrela:
-        st.button(
-            "⭐" if is_fav else "☆",
-            key=f"{key_prefix}_star_{p.id}",
-            help="Remover dos favoritos" if is_fav else "Marcar como favorito",
-            on_click=toggle_favorito,
-            args=(p.id,),
-        )
-    with col_expander:
-        with st.expander(titulo_expander):
+    with st.container(border=True):
+        col_estrela, col_titulo = st.columns([0.09, 0.91], gap="small")
+        with col_estrela:
+            st.button(
+                "⭐" if is_fav else "☆",
+                key=f"{key_prefix}_star_{p.id}",
+                help="Remover dos favoritos" if is_fav else "Marcar como favorito",
+                on_click=toggle_favorito,
+                args=(p.id,),
+            )
+        with col_titulo:
+            seta = "▼" if st.session_state[expand_key] else "▶"
+            if st.button(f"{seta}  {titulo}", key=f"{key_prefix}_toggle_{p.id}", use_container_width=True):
+                st.session_state[expand_key] = not st.session_state[expand_key]
+
+        if st.session_state[expand_key]:
+            st.markdown("---")
             render_detalhes_partida(p, analise)
     st.markdown('</div>', unsafe_allow_html=True)
 
