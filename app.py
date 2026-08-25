@@ -9,6 +9,7 @@ TAYSCORE — DASHBOARD DE ANÁLISE PREDITIVA DE APOSTAS ESPORTIVAS
 import os
 import math
 import random
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
@@ -293,6 +294,17 @@ st.markdown("""
         margin-bottom: 8px;
     }
 
+    /* ============ LINHA DE PARTIDA (ESTRELA + EXPANDER) ============ */
+    .linha-partida div[data-testid="column"]:first-child button {
+        border-radius: 50%;
+        padding: 0.25rem 0.5rem;
+        border-color: #30363d;
+    }
+    .linha-partida div[data-testid="column"]:first-child button:hover {
+        border-color: #F7B731;
+        color: #F7B731;
+    }
+
     /* ============ TABS ============ */
     .stTabs [data-baseweb="tab-list"] {
         gap: 4px;
@@ -366,6 +378,16 @@ class Partida:
     estat_visitante: EstatisticasTime
 
 
+def _seed_estavel(texto: str) -> int:
+    """
+    Gera um seed determinístico a partir de um texto.
+    Usamos hashlib (em vez da hash() nativa do Python) porque a hash() nativa
+    é salgada por processo (PYTHONHASHSEED): o mesmo time pode gerar estatísticas
+    diferentes a cada reinício do servidor. Com md5 o resultado é sempre o mesmo.
+    """
+    return int(hashlib.md5(texto.encode("utf-8")).hexdigest(), 16) % 10000
+
+
 def _gerar_ultimos_jogos(seed: int) -> List[str]:
     rng = random.Random(seed)
     return rng.choices(["V", "E", "D"], weights=[0.45, 0.30, 0.25], k=5)
@@ -415,8 +437,8 @@ def buscar_partidas_api_global(data: str, api_key: str) -> List[Partida]:
                 horario_utc = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
                 horario_local = horario_utc.astimezone(FUSO_BRASIL)
 
-                seed_m = abs(hash(mandante_nome)) % 10000
-                seed_v = abs(hash(visitante_nome)) % 10000
+                seed_m = _seed_estavel(mandante_nome)
+                seed_v = _seed_estavel(visitante_nome)
 
                 partidas.append(Partida(
                     id=f_id,
@@ -548,8 +570,18 @@ def calcular_mercado_escanteios(estat_m: EstatisticasTime, estat_v: Estatisticas
     }
 
 
-def analisar_partida_completa(partida: Partida) -> dict:
-    lm, lv = calcular_lambda_gols(partida.estat_mandante, partida.estat_visitante)
+def _stats_tuple(e: EstatisticasTime) -> tuple:
+    """Representação hashable e enxuta das estatísticas de um time, usada como chave de cache."""
+    return (
+        e.gols_marcados_media, e.gols_sofridos_media,
+        e.escanteios_favor_media, e.escanteios_contra_media,
+        e.cartoes_amarelos_media, e.cartoes_vermelhos_media,
+        e.finalizacoes_gol_media,
+    )
+
+
+def _analise_core(estat_mandante: EstatisticasTime, estat_visitante: EstatisticasTime) -> dict:
+    lm, lv = calcular_lambda_gols(estat_mandante, estat_visitante)
     matriz = matriz_placares_poisson(lm, lv)
     return {
         "lambda_mandante": round(lm, 2),
@@ -558,13 +590,45 @@ def analisar_partida_completa(partida: Partida) -> dict:
         "top_10_placares": obter_top_10_placares(matriz),
         "probs_1x2": probabilidades_1x2(matriz),
         "over_under_gols": {linha: probabilidade_over_under(matriz, linha) for linha in [1.5, 2.5, 3.5]},
-        "escanteios": calcular_mercado_escanteios(partida.estat_mandante, partida.estat_visitante),
+        "escanteios": calcular_mercado_escanteios(estat_mandante, estat_visitante),
         "secundarios": {
-            "cartoes_amarelos": round(partida.estat_mandante.cartoes_amarelos_media + partida.estat_visitante.cartoes_amarelos_media, 2),
-            "cartoes_vermelhos": round(partida.estat_mandante.cartoes_vermelhos_media + partida.estat_visitante.cartoes_vermelhos_media, 2),
-            "finalizacoes": round(partida.estat_mandante.finalizacoes_gol_media + partida.estat_visitante.finalizacoes_gol_media, 2),
+            "cartoes_amarelos": round(estat_mandante.cartoes_amarelos_media + estat_visitante.cartoes_amarelos_media, 2),
+            "cartoes_vermelhos": round(estat_mandante.cartoes_vermelhos_media + estat_visitante.cartoes_vermelhos_media, 2),
+            "finalizacoes": round(estat_mandante.finalizacoes_gol_media + estat_visitante.finalizacoes_gol_media, 2),
         }
     }
+
+
+@st.cache_data(show_spinner=False)
+def analisar_partida_completa_cached(partida_id: str, dados_m: tuple, dados_v: tuple) -> dict:
+    """
+    Versão cacheada da análise. Como os argumentos são tipos simples (str/tuple),
+    o Streamlit consegue memoizar por partida: enquanto os números do confronto
+    não mudarem, a matriz de Poisson, o top 10 de placares e os mercados de
+    escanteios só são calculados UMA vez, mesmo que a tela seja redesenhada
+    a cada tecla digitada na busca ou a cada clique de aba/expander.
+    """
+    estat_m = EstatisticasTime(
+        nome="", gols_marcados_media=dados_m[0], gols_sofridos_media=dados_m[1],
+        escanteios_favor_media=dados_m[2], escanteios_contra_media=dados_m[3],
+        cartoes_amarelos_media=dados_m[4], cartoes_vermelhos_media=dados_m[5],
+        finalizacoes_gol_media=dados_m[6], ultimos_5_jogos=[],
+    )
+    estat_v = EstatisticasTime(
+        nome="", gols_marcados_media=dados_v[0], gols_sofridos_media=dados_v[1],
+        escanteios_favor_media=dados_v[2], escanteios_contra_media=dados_v[3],
+        cartoes_amarelos_media=dados_v[4], cartoes_vermelhos_media=dados_v[5],
+        finalizacoes_gol_media=dados_v[6], ultimos_5_jogos=[],
+    )
+    return _analise_core(estat_m, estat_v)
+
+
+def analisar_partida_completa(partida: Partida) -> dict:
+    return analisar_partida_completa_cached(
+        partida.id,
+        _stats_tuple(partida.estat_mandante),
+        _stats_tuple(partida.estat_visitante),
+    )
 
 # ==============================================================================
 # 4. COMPONENTES VISUAIS (INTERFACE GRÁFICA)
@@ -753,6 +817,63 @@ def render_summary_strip(total_partidas: int, total_ligas: int, data_ref) -> str
     """
 
 
+def toggle_favorito(partida_id: str):
+    if partida_id in st.session_state.favoritos:
+        st.session_state.favoritos.discard(partida_id)
+    else:
+        st.session_state.favoritos.add(partida_id)
+
+
+def render_partida_com_estrela(p: Partida, key_prefix: str):
+    """Renderiza uma linha de partida: botão de estrela (favoritar) + expander com os detalhes."""
+    analise = analisar_partida_completa(p)
+    is_fav = p.id in st.session_state.favoritos
+    fogo = " 🔥" if p.liquidez >= 2_000_000 else ""
+    titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} — {p.mandante} x {p.visitante}{fogo}"
+
+    st.markdown('<div class="linha-partida">', unsafe_allow_html=True)
+    col_estrela, col_expander = st.columns([0.045, 0.955])
+    with col_estrela:
+        st.button(
+            "⭐" if is_fav else "☆",
+            key=f"{key_prefix}_star_{p.id}",
+            help="Remover dos favoritos" if is_fav else "Marcar como favorito",
+            on_click=toggle_favorito,
+            args=(p.id,),
+            use_container_width=True,
+        )
+    with col_expander:
+        with st.expander(titulo_expander):
+            render_detalhes_partida(p, analise)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_galeria_favoritos(todas_partidas: List[Partida]):
+    """Galeria fixa com os jogos marcados com estrela, exibida logo abaixo da barra de pesquisa."""
+    favoritos_ids = st.session_state.favoritos
+    if not favoritos_ids:
+        return
+
+    partidas_fav = [p for p in todas_partidas if p.id in favoritos_ids]
+    if not partidas_fav:
+        return
+
+    partidas_fav = sorted(partidas_fav, key=lambda p: p.horario)
+
+    st.markdown(f"""
+    <div class="league-header" style="border-left-color:#F7B731;">
+        <span>⭐</span>
+        <span class="league-name">Seus Favoritos do Dia</span>
+        <span class="league-count">{len(partidas_fav)} jogo(s)</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    for p in partidas_fav:
+        render_partida_com_estrela(p, key_prefix="fav")
+
+    st.markdown("---")
+
+
 def main():
     # Header com Visual Moderno
     st.markdown("""
@@ -761,6 +882,11 @@ def main():
         <div class="hero-subtitle">Análise Preditiva & Inteligência Esportiva de Alto Desempenho</div>
     </div>
     """, unsafe_allow_html=True)
+
+    if "favoritos" not in st.session_state:
+        st.session_state.favoritos = set()
+    if "busca_input" not in st.session_state:
+        st.session_state.busca_input = ""
 
     with st.sidebar:
         st.header("⚙️ Painel de Controle")
@@ -788,12 +914,25 @@ def main():
 
     st.markdown(render_summary_strip(len(partidas), len(set(p.liga_nome for p in partidas)), data_ref), unsafe_allow_html=True)
 
-    # BARRA HORIZONTAL DE PESQUISAS DE JOGOS
-    termo_busca = st.text_input(
-        label="Pesquisar partidas",
-        placeholder="🔍 Digite o nome de um time ou competição para filtrar...",
-        label_visibility="collapsed"
-    ).strip().lower()
+    # BARRA HORIZONTAL DE PESQUISA + BOTÃO DE VOLTAR
+    col_busca, col_voltar = st.columns([0.85, 0.15])
+    with col_busca:
+        termo_busca_raw = st.text_input(
+            label="Pesquisar partidas",
+            placeholder="🔍 Digite o nome de um time ou competição para filtrar...",
+            label_visibility="collapsed",
+            key="busca_input",
+        )
+    with col_voltar:
+        if termo_busca_raw.strip():
+            if st.button("← Voltar", use_container_width=True, help="Limpar busca e ver todos os jogos"):
+                st.session_state.busca_input = ""
+                st.rerun()
+
+    termo_busca = termo_busca_raw.strip().lower()
+
+    # GALERIA DE FAVORITOS — sempre visível abaixo da busca, independente do filtro
+    render_galeria_favoritos(partidas)
 
     # Filtragem dos jogos com base na pesquisa
     if termo_busca:
@@ -826,12 +965,7 @@ def main():
         lista_jogos_ordenada = sorted(lista_jogos, key=lambda p: p.horario)
 
         for p in lista_jogos_ordenada:
-            analise = analisar_partida_completa(p)
-            fogo = " 🔥" if p.liquidez >= 2_000_000 else ""
-            titulo_expander = f"⏰ {p.horario.strftime('%H:%M')} — {p.mandante} x {p.visitante}{fogo}"
-
-            with st.expander(titulo_expander):
-                render_detalhes_partida(p, analise)
+            render_partida_com_estrela(p, key_prefix="lista")
 
 
 if __name__ == "__main__":
